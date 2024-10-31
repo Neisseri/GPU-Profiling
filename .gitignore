@@ -1,7 +1,1 @@
-*
-!.gitignore
-!Makefile
-!*.c
-!*.sh
-!*.cu
-!record.txt
+record.txt
