@@ -5,7 +5,7 @@
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
-#define PROG_PATH "/home/timothy/code/codes/cuda/exp/exp1/a.out"
+#define PROG_PATH "/mnt/e/Program/ebpf-cuda-examples/cuda/cpmem"
 
 static void *local_memset(void *ptr, int value, size_t num)
 {
@@ -53,6 +53,10 @@ int BPF_UPROBE(cuda_malloc, void **devPtr, size_t size)
 {
     __u64 id = bpf_get_current_pid_tgid();
     __u32 tgid = (__u32)(id >> 32);
+
+    // print cudaMalloc
+    const char fmt[] = "cudaMalloc called: pid = %u, size = %zu\n";
+    bpf_trace_printk(fmt, sizeof(fmt), tgid, size);
 
     malloc_data_t *data = cuda_malloc_info_lookup(&tgid);
     __u64 call_time = bpf_ktime_get_ns();
@@ -132,6 +136,10 @@ int BPF_URETPROBE(cuda_malloc_ret, int ret)
     __u32 tgid = (__u32)(id >> 32);
     __u32 pid = (__u32)id;
 
+    // print cudaMalloc ret
+    const char fmt[] = "cudaMalloc Ret: pid = %u\n";
+    bpf_trace_printk(fmt, sizeof(fmt), tgid);
+
     if (ret != 0) // Malloc failed
     {
         return 0;
@@ -196,6 +204,11 @@ SEC("uprobe/" PROG_PATH ":cudaFree")
 int BPF_UPROBE(cuda_free, void *devPtr)
 {
     __u64 id = bpf_get_current_pid_tgid();
+
+    // print cudaFree
+    __u32 tgid = (__u32)(id >> 32);
+    const char fmt[] = "cudaFree called: pid = %u, devPtr = %p\n";
+    bpf_trace_printk(fmt, sizeof(fmt), tgid, devPtr);
 
     __u32 zero = 0;
     unwind_stack_t *state = heap_lookup(&zero);

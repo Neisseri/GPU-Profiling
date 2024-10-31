@@ -1,0 +1,1 @@
+echo 1 > /sys/kernel/debug/tracing/events/syscalls/sys_enter_execve/enable
