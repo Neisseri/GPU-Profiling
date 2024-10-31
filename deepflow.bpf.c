@@ -55,7 +55,7 @@ int BPF_UPROBE(cuda_malloc, void **devPtr, size_t size)
     __u32 tgid = (__u32)(id >> 32);
 
     // print cudaMalloc
-    const char fmt[] = "cudaMalloc called: pid = %u, size = %zu\n";
+    const char fmt[] = "cudaMalloc called: pid = %u, size = %u\n";
     bpf_trace_printk(fmt, sizeof(fmt), tgid, size);
 
     malloc_data_t *data = cuda_malloc_info_lookup(&tgid);
