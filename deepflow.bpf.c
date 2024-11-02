@@ -17,6 +17,14 @@ static void *local_memset(void *ptr, int value, size_t num)
     return ptr;
 }
 
+// GPU Memory Info
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 4096);
+    __type(key, __u32); // tgid
+    __type(value, __u32); // used GPU memory
+} gpu_memory_info SEC(".maps");
+
 typedef struct
 {
     void **address;
@@ -77,6 +85,14 @@ int BPF_UPROBE(cuda_malloc, void **devPtr, size_t size)
             .rip = PT_REGS_IP(ctx),
         };
         cuda_malloc_info_update(&tgid, &newdata);
+    }
+
+    __u32* mem_data = (__u32*)bpf_map_lookup_elem(&gpu_memory_info, &tgid);
+    if (mem_data) {
+        mem_data += size;
+    } else {
+        __u32 new_mem_data = size;
+        bpf_map_update_elem(&gpu_memory_info, &tgid, &new_mem_data, BPF_ANY);
     }
 
     return 0;

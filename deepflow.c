@@ -24,6 +24,14 @@ void sig_int(int signo)
     stop = 1;
 }
 
+typedef struct
+{
+    void **address;
+    size_t size;
+    __u64 call_time;
+    __u64 rip;
+} malloc_data_t;
+
 int main(int argc, char *argv[])
 {
     struct deepflow_bpf *skel;
@@ -57,8 +65,28 @@ int main(int argc, char *argv[])
     printf("Successfully started! Please run `sudo cat /sys/kernel/debug/tracing/trace_pipe` "
            "to see output of the BPF programs.\n");
 
+    // GPU Memory Info
+    struct bpf_map* gpu_mem_map_fd = skel->maps.gpu_memory_info;
+    if (!gpu_mem_map_fd) {
+        fprintf(stderr, "Failed to get map fd\n");
+        goto cleanup;
+    }
+    __u32 key = 0;
+    __u32 next_key = 0;
+    __u32 value;
+
     while (!stop)
     {
+        key = 0;
+        while (bpf_map__get_next_key(gpu_mem_map_fd, &key, &next_key, sizeof(next_key)) == 0) {
+            if (bpf_map__lookup_elem(gpu_mem_map_fd, &next_key, sizeof(next_key), &value, sizeof(value), 0) == 0) {
+                printf("PID: %u, GPU Memory Usage: %u\n", next_key, value);
+            } else {
+                fprintf(stderr, "Failed to lookup element for key: %u\n", next_key);
+            }
+            key = next_key;
+        }
+
         fprintf(stderr, ".");
         sleep(1);
     }
