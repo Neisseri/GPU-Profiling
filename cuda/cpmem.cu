@@ -1,4 +1,5 @@
 #include <cstdio>
+#include <unistd.h>
 
 __global__ void product(const double *x, const double *y, double *z, int n) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -22,7 +23,13 @@ int main() {
 
   double *d_x, *d_y, *d_z;
   cudaMalloc((void **)&d_x, N * sizeof(double));
+
+  sleep(3);
+
   cudaMalloc((void **)&d_y, N * sizeof(double));
+
+  sleep(3);
+
   cudaMalloc((void **)&d_z, N * sizeof(double));
 
   cudaMemcpy(d_x, x, N * sizeof(double), cudaMemcpyHostToDevice);
@@ -32,8 +39,16 @@ int main() {
 
   cudaMemcpy(z, d_z, N * sizeof(double), cudaMemcpyDeviceToHost);
 
+  sleep(3);
+
   cudaFree(d_z);
+
+  sleep(3);
+
   cudaFree(d_y);
+  
+  sleep(3);
+  
   cudaFree(d_x);
 
   for (int i = 0; i < N; ++i) {
