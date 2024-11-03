@@ -25,6 +25,20 @@ struct {
     __type(value, __u32); // used GPU memory
 } gpu_memory_info SEC(".maps");
 
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 4096);
+    __type(key, __u64); // malloc address
+    __type(value, __u32); // malloc size
+} cuda_malloc_hash SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 4096);
+    __type(key, __u32); // PID
+    __type(value, __u64); // void**
+} malloc_ptr_info SEC(".maps");
+
 typedef struct
 {
     void **address;
@@ -89,11 +103,34 @@ int BPF_UPROBE(cuda_malloc, void **devPtr, size_t size)
 
     __u32* mem_data = (__u32*)bpf_map_lookup_elem(&gpu_memory_info, &tgid);
     if (mem_data) {
-        mem_data += size;
+        *mem_data += size;
     } else {
         __u32 new_mem_data = size;
         bpf_map_update_elem(&gpu_memory_info, &tgid, &new_mem_data, BPF_ANY);
     }
+
+    void* devPtr_;
+    bpf_probe_read_user(&devPtr_, sizeof(void*), devPtr);
+    __u64 addr = (__u64)(devPtr_);
+
+    __u64* ptr_data = (__u64*)bpf_map_lookup_elem(&malloc_ptr_info, &tgid);
+    if (ptr_data) {
+        *ptr_data = (__u64)(devPtr);
+    } else {
+        __u64 new_ptr_data = (__u64)(devPtr);
+        bpf_map_update_elem(&malloc_ptr_info, &tgid, &new_ptr_data, BPF_ANY);
+    }
+
+    const char fmt1[] = "cudaMalloc called: addr1 = %llu, addr2 = %llu\n";
+    bpf_trace_printk(fmt1, sizeof(fmt1), (__u64)devPtr, (__u64)devPtr_);
+
+    // __u32 malloc_size = size;
+    // __u32* data_size = (__u32*)bpf_map_lookup_elem(&cuda_malloc_hash, &addr);
+    // if (data_size) {
+    //     *data_size = malloc_size;
+    // } else {
+    //     bpf_map_update_elem(&cuda_malloc_hash, &addr, &malloc_size, BPF_ANY);
+    // }
 
     return 0;
 }
@@ -161,50 +198,41 @@ int BPF_URETPROBE(cuda_malloc_ret, int ret)
         return 0;
     }
 
-    malloc_data_t *data_in_map = cuda_malloc_info_lookup(&tgid);
-    if (data_in_map != NULL)
-    {
-        return 0;
-    }
-    malloc_data_t data;
-    bpf_probe_read(&data, sizeof(data), data_in_map);
-    cuda_malloc_info_delete(&tgid); // QUESTION: Why delete here?
-
-    __u32 zero = 0;
-    unwind_stack_t *state = heap_lookup(&zero); // QUESTION: Where to get the default value?
-    if (state == NULL)
-    {
-        const char fmt[] = "ERROR: state is NULL\n";
-        bpf_trace_printk(fmt, sizeof(fmt));
-        return 0;
-    }
-    local_memset(state, 0, sizeof(unwind_stack_t));
-
-    struct stack_trace_key_t *key = &state->key;
-    key->tgid = tgid;
-    key->pid = pid;
-
-    if (tgid == pid && pid == 0)
-    {
-        return 0; // Ignore kernel threads
+    __u64* ptr_data = (__u64*)bpf_map_lookup_elem(&malloc_ptr_info, &tgid);
+    void* devPtr = NULL;
+    if (ptr_data) {
+        devPtr = (void**)(*ptr_data); // void** devPtr
     }
 
-    key->cpu = bpf_get_smp_processor_id();
-    bpf_get_current_comm(&key->comm, sizeof(key->comm));
-    key->timestamp = bpf_ktime_get_ns();
+    if (ptr_data) {
+        const char fmt1[] = "cudaMalloc Ret: (__u64)devPtr = %llu\n";
+        bpf_trace_printk(fmt1, sizeof(fmt1), *ptr_data);
 
-    bpf_probe_read_user((void *)&key->mem_addr, sizeof(key->mem_addr), (void *)data.address);
-    key->mem_size = data.size;
+        void* devPtr_;
+        bpf_probe_read_user(&devPtr_, sizeof(void*), devPtr);
+        __u64 addr = (__u64)(devPtr_);
+        const char fmt3[] = "cudaMalloc Ret: addr = %llu\n";
+        bpf_trace_printk(fmt3, sizeof(fmt3), addr);
 
-    // Add one frame for cudaMalloc
-    // Native unwinding start from uretprobe, which has the ret state after cudaMalloc return
-    add_frame(&state->stack, data.rip);
+        __u32 malloc_size = 1024;
+        __u32* data_size = (__u32*)bpf_map_lookup_elem(&cuda_malloc_hash, &addr);
+        if (data_size) {
+            *data_size = malloc_size;
+        } else {
+            bpf_map_update_elem(&cuda_malloc_hash, &addr, &malloc_size, BPF_ANY);
+        }
+    } else {
+        const char fmt2[] = "cudaMalloc Ret: (__u64)devPtr Not Found\n";
+        bpf_trace_printk(fmt2, sizeof(fmt2));
+    }
 
-    state->regs.ip = PT_REGS_IP(ctx);
-    state->regs.sp = PT_REGS_SP(ctx);
-    state->regs.bp = PT_REGS_FP(ctx);
-    add_frame(&state->stack, state->regs.ip);
-    // bpf_tail_call(ctx, &NAME(progs_jmp_uprobe_map), PROG_DWARF_UNWIND_IDX); // QUESTION & TODO: What is this?
+    // __u32 malloc_size = 0;
+    // __u32* data_size = (__u32*)bpf_map_lookup_elem(&cuda_malloc_hash, &addr);
+    // if (data_size) {
+    //     *data_size = malloc_size;
+    // } else {
+    //     bpf_map_update_elem(&cuda_malloc_hash, &addr, &malloc_size, BPF_ANY);
+    // }
 
     return 0;
 }
@@ -252,6 +280,22 @@ int BPF_UPROBE(cuda_free, void *devPtr)
     key->mem_addr = (__u64)devPtr;
 
     bpf_perf_event_output(ctx, &cuda_memory_output, BPF_F_CURRENT_CPU, &state->key, sizeof(state->key));
+
+    // cuda malloc hash
+    __u64 addr = (__u64)(devPtr);
+
+    const char fmt1[] = "cudaFree called: addr = %llu\n";
+    bpf_trace_printk(fmt1, sizeof(fmt1), (__u64)devPtr);
+
+    __u32* malloc_size = (__u32*)bpf_map_lookup_elem(&cuda_malloc_hash, &addr);
+    __u32 m_size = 0;
+    if (malloc_size) {
+        m_size = *malloc_size;
+    }
+    __u32* mem_data = (__u32*)bpf_map_lookup_elem(&gpu_memory_info, &tgid);
+    if (mem_data) {
+        *mem_data -= m_size;
+    }
 
     return 0;
 }
